@@ -64,9 +64,12 @@ def split_menu_text(menu_text: str) -> List[str]:
 # ---------------------- 异步 GPT 调用 ----------------------
 async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
     prompt = f"""
-Translate the following menu items into {output_language} and write a short, rich description for each (ingredients, flavor, prep).
-Use only {output_language}. Return valid JSON: [{{"name": "...", "description": "..."}}]
+You are a culinary expert. For each of the following menu items, generate a concise description in {output_language}, limited to 1–2 complete sentences. The description must include key details such as ingredients, flavor, and preparation style, while staying natural and informative.
 
+Only output in {output_language}. Return a valid JSON array like:
+[{{"name": "...", "description": "..."}}]
+
+Menu items:
 {chunk_text}
 """
     headers = {
@@ -79,7 +82,8 @@ Use only {output_language}. Return valid JSON: [{{"name": "...", "description": 
         "messages": [
             {"role": "system", "content": "You are a food expert."},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        "temperature": 0.4  # 更稳定
     }
 
     try:
