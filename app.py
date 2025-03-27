@@ -117,7 +117,12 @@ async def get_menu_descriptions_async(menu_text: str, output_language: str):
         tasks = [generate_chunk_descriptions(session, chunk, output_language) for chunk in chunks]
         completed = await asyncio.gather(*tasks)
         for result in completed:
-            results.extend(result)
+            # 过滤掉错误项（name 以 Error 开头）
+            filtered = [
+                item for item in result
+                if isinstance(item, dict) and "name" in item and "description" in item and not item["name"].lower().startswith("error")
+            ]
+            results.extend(filtered)
 
     return results
 
