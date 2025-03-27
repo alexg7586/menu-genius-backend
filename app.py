@@ -63,20 +63,20 @@ def split_menu_text(menu_text: str) -> List[str]:
 
 # ---------------------- Prompt Template ----------------------
 PROMPT_TEMPLATE = """
-The following is part of a restaurant menu. For each dish, return:
-- Translated name (omit prices, numbers, and section labels)
-- Short description (main ingredients, flavor, preparation)
+The following is part of a restaurant menu. Each line may include a dish name, and some lines may also include a brief description.
 
-Ignore prices (e.g., "$12.99", "25元") and items under set meals.
+Your task is:
+1. Extract the actual dish name (omit prices, numbering, and section labels).
+2. If a description is present, rephrase it into a clear, natural English sentence.
+3. If no description is present, write a reasonable one based on the dish name and culinary knowledge.
+4. All descriptions must be 1–2 natural-sounding sentences.
 
-If a line contains both the dish name and its description (e.g. separated by dash, colon, or parentheses), split them accordingly.
-Extract only the actual dish name into the "name" field, and the rest into the "description" field.
-
-Be concise (1-2 sentences). Respond only in English as a JSON array:
+Output only a JSON array:
 [
-  {{"name": "...", "description": "..."}},
+  { "name": "...", "description": "..." },
   ...
 ]
+
 Menu:
 {chunk_text}
 """
@@ -121,6 +121,7 @@ async def get_menu_descriptions_async(menu_text: str, output_language: str):
         tasks = [generate_chunk_descriptions(session, chunk, output_language) for chunk in chunks]
         completed = await asyncio.gather(*tasks)
         for result in completed:
+            # 过滤掉错误项（name 以 Error 开头）
             filtered = [
                 item for item in result
                 if isinstance(item, dict) and "name" in item and "description" in item and not item["name"].lower().startswith("error")
@@ -149,4 +150,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 5001))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
-
