@@ -69,7 +69,8 @@ The following is part of a restaurant menu. For each actual dish, provide:
 - A translated name (omit numbering, category labels, and prices)
 - A short description (ingredients, flavor, preparation)
 
-Ignore any price information when identifying dish names.
+Ignore any price information (e.g., numbers like "$12.99", "25元") when identifying dish names.
+If an item is part of a set meal (e.g., optional dishes listed under a combo), do not list it as a standalone dish.
 Avoid long descriptions or unnecessary details. Use 1-2 short sentences.
 Respond only in {output_language}.
 
@@ -84,7 +85,6 @@ Format your response as a valid JSON array:
 Menu:
 {chunk_text}
 """
-
 
     headers = {
         "Authorization": f"Bearer {openai.api_key}",
@@ -140,7 +140,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 5001))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
-
-
-
-
