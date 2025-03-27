@@ -2,23 +2,32 @@ import os
 import openai
 import base64
 import json
-import asyncio
 import aiohttp
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import asyncio
+from fastapi import FastAPI, UploadFile, Form, File
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List
 
-app = Flask(__name__)
-CORS(app)
-
+app = FastAPI()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
+
+# CORS 支持
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
 
-def allowed_file(filename):
+def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------------------- OCR 同步提取 ----------------------
-def extract_text_from_image(file_data):
+# ---------------------- OCR 提取 ----------------------
+def extract_text_from_image(file_data: bytes) -> str:
     base64_image = base64.b64encode(file_data).decode("utf-8")
     response = openai.chat.completions.create(
         model="gpt-4o-mini",
@@ -32,8 +41,8 @@ def extract_text_from_image(file_data):
     )
     return response.choices[0].message.content.strip()
 
-# ---------------------- 智能分组菜单 ----------------------
-def split_menu_text(menu_text):
+# ---------------------- 智能分组 ----------------------
+def split_menu_text(menu_text: str) -> List[str]:
     lines = [line.strip() for line in menu_text.splitlines() if line.strip()]
     total = len(lines)
 
@@ -52,15 +61,14 @@ def split_menu_text(menu_text):
         chunks.append(chunk)
     return chunks
 
-# ---------------------- Async GPT 生成描述 ----------------------
-async def generate_chunk_descriptions(session, chunk_text, output_language="English"):
+# ---------------------- 异步 GPT 调用 ----------------------
+async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
     prompt = f"""
 Translate the following menu items into {output_language} and write a short, rich description for each (ingredients, flavor, prep).
 Use only {output_language}. Return valid JSON: [{{"name": "...", "description": "..."}}]
 
 {chunk_text}
 """
-
     headers = {
         "Authorization": f"Bearer {openai.api_key}",
         "Content-Type": "application/json"
@@ -82,8 +90,8 @@ Use only {output_language}. Return valid JSON: [{{"name": "...", "description": 
     except Exception as e:
         return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
 
-# ---------------------- Async 执行全部任务 ----------------------
-async def get_menu_descriptions_async(menu_text, output_language="English"):
+# ---------------------- 主处理逻辑 ----------------------
+async def get_menu_descriptions_async(menu_text: str, output_language: str):
     chunks = split_menu_text(menu_text)
     results = []
 
@@ -95,34 +103,25 @@ async def get_menu_descriptions_async(menu_text, output_language="English"):
 
     return results
 
-# ---------------------- Flask 路由入口 ----------------------
-@app.route("/upload", methods=["POST"])
-def upload_file():
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-
-    file = request.files["file"]
-    if file.filename == "":
-        return jsonify({"error": "Empty filename"}), 400
-
+# ---------------------- FastAPI 接口 ----------------------
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...), language: str = Form("English")):
     if not allowed_file(file.filename):
-        return jsonify({"error": "Unsupported file type. Please upload a JPG, JPEG, PNG, or WEBP image."}), 400
+        return {"error": "Unsupported file type. Please upload JPG, JPEG, PNG, or WEBP."}
 
-    file_data = file.read()
+    file_data = await file.read()
     menu_text = extract_text_from_image(file_data)
 
     if not menu_text.strip() or len(menu_text.strip()) < 10:
-        return jsonify({"error": "OCR failed or returned invalid text"}), 400
+        return {"error": "OCR failed or returned invalid text"}
 
-    output_language = request.form.get("language", "English")
-
-    # ⏳ 启动异步任务
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    menu_descriptions = loop.run_until_complete(get_menu_descriptions_async(menu_text, output_language))
-
-    return jsonify({"menu": menu_descriptions})
+    menu_descriptions = await get_menu_descriptions_async(menu_text, language)
+    return {"menu": menu_descriptions}
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    import uvicorn
+    port = int(os.environ.get("PORT", 5001))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
+
+
 
