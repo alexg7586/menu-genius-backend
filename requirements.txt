@@ -5,5 +5,3 @@ fastapi
 uvicorn
 aiohttp
 python-multipart
-
-

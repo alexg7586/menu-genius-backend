@@ -66,10 +66,10 @@ async def generate_chunk_descriptions(session, chunk_text: str, output_language:
     prompt = f"""
 The following is part of a restaurant menu. For each actual dish, provide:
 
-- A translated name (omit numbering or category labels)
+- A translated name (omit numbering, category labels, and prices)
 - A short description (ingredients, flavor, preparation)
 
-Ignore any non-dish content such as section titles or decorations.
+Ignore any price information when identifying dish names.
 Avoid long descriptions or unnecessary details. Use 1-2 short sentences.
 Respond only in {output_language}.
 
@@ -84,6 +84,7 @@ Format your response as a valid JSON array:
 Menu:
 {chunk_text}
 """
+
 
     headers = {
         "Authorization": f"Bearer {openai.api_key}",
