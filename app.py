@@ -2,25 +2,24 @@ import os
 import openai
 import base64
 import json
+import asyncio
+import aiohttp
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
-GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")  # 默认更快的模型
-
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------------------- OCR 提取菜单文本 ----------------------
+# ---------------------- OCR 同步提取 ----------------------
 def extract_text_from_image(file_data):
     base64_image = base64.b64encode(file_data).decode("utf-8")
-
     response = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -31,15 +30,13 @@ def extract_text_from_image(file_data):
             ]}
         ]
     )
-
     return response.choices[0].message.content.strip()
 
-# ---------------------- 菜单智能分组 ----------------------
+# ---------------------- 智能分组菜单 ----------------------
 def split_menu_text(menu_text):
     lines = [line.strip() for line in menu_text.splitlines() if line.strip()]
     total = len(lines)
 
-    # 智能决定每组条数
     if total <= 8:
         chunk_size = total
     elif total <= 15:
@@ -55,48 +52,46 @@ def split_menu_text(menu_text):
         chunks.append(chunk)
     return chunks
 
-# ---------------------- 单个小段调用 GPT 生成 ----------------------
-def generate_chunk_descriptions(chunk_text, output_language="English"):
+# ---------------------- Async GPT 生成描述 ----------------------
+async def generate_chunk_descriptions(session, chunk_text, output_language="English"):
     prompt = f"""
-Here is a part of a restaurant menu:
+Translate the following menu items into {output_language} and write a short, rich description for each (ingredients, flavor, prep).
+Use only {output_language}. Return valid JSON: [{{"name": "...", "description": "..."}}]
 
 {chunk_text}
-
-Translate each dish name into {output_language}, and provide a short but rich description (ingredients, flavor, prep).
-Use only {output_language}, and return result in this JSON format:
-[
-  {{
-    "name": "...",
-    "description": "..."
-  }}
-]
 """
+
+    headers = {
+        "Authorization": f"Bearer {openai.api_key}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": GPT_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are a food expert."},
+            {"role": "user", "content": prompt}
+        ]
+    }
+
     try:
-        response = openai.chat.completions.create(
-            model=GPT_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a food expert."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        content = response.choices[0].message.content.strip("```json").strip("```")
-        return json.loads(content)
+        async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as resp:
+            data = await resp.json()
+            content = data["choices"][0]["message"]["content"].strip("```json").strip("```")
+            return json.loads(content)
     except Exception as e:
         return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
 
-# ---------------------- 合并并发执行所有 chunk ----------------------
-def get_menu_descriptions(menu_text, output_language="English"):
+# ---------------------- Async 执行全部任务 ----------------------
+async def get_menu_descriptions_async(menu_text, output_language="English"):
     chunks = split_menu_text(menu_text)
     results = []
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(generate_chunk_descriptions, chunk, output_language) for chunk in chunks]
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                results.extend(result)
-            except Exception as e:
-                results.append({"name": "Error", "description": f"Unexpected error: {str(e)}"})
+    async with aiohttp.ClientSession() as session:
+        tasks = [generate_chunk_descriptions(session, chunk, output_language) for chunk in chunks]
+        completed = await asyncio.gather(*tasks)
+        for result in completed:
+            results.extend(result)
 
     return results
 
@@ -120,7 +115,11 @@ def upload_file():
         return jsonify({"error": "OCR failed or returned invalid text"}), 400
 
     output_language = request.form.get("language", "English")
-    menu_descriptions = get_menu_descriptions(menu_text, output_language)
+
+    # ⏳ 启动异步任务
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    menu_descriptions = loop.run_until_complete(get_menu_descriptions_async(menu_text, output_language))
 
     return jsonify({"menu": menu_descriptions})
 
