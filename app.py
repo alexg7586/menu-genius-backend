@@ -3,8 +3,12 @@ import base64
 import json
 import aiohttp
 import asyncio
+import logging
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -32,27 +36,34 @@ def split_menu_text(menu_text: str, chunk_size: int = 12):
     return ["\n".join(lines[i:i + chunk_size]) for i in range(0, len(lines), chunk_size)]
 
 async def extract_text_from_image_async(session, image_data: bytes) -> str:
-    base64_image = base64.b64encode(image_data).decode("utf-8")
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": "You are an OCR assistant."},
-            {"role": "user", "content": [
-                {"type": "text", "text": "Extract text from this image."},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-            ]}
-        ]
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
-        result = await resp.json()
-        return result["choices"][0]["message"]["content"].strip()
+    try:
+        base64_image = base64.b64encode(image_data).decode("utf-8")
+        payload = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": "You are an OCR assistant."},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Extract text from this image."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]}
+            ]
+        }
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
+            result = await resp.json()
+            content = result.get("choices", [{}])[0].get("message", {}).get("content")
+            if not content:
+                raise ValueError("OpenAI OCR: No content returned")
+            return content.strip()
+    except Exception as e:
+        raise RuntimeError(f"OCR failed: {str(e)}")
 
 async def generate_chunk(session, chunk: str):
-    prompt = f"""
+    try:
+        prompt = f"""
 You are analyzing a restaurant menu. Each line may include a dish name, or a dish name followed by a description.
 
 Instructions:
@@ -67,20 +78,28 @@ Output format:
 Menu:
 {chunk}
 """
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": "You are a food expert."},
-            {"role": "user", "content": prompt}
-        ]
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
-        result = await resp.json()
-        return json.loads(result["choices"][0]["message"]["content"])  # return list of dicts
+        payload = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a food expert."},
+                {"role": "user", "content": prompt}
+            ]
+        }
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
+            result = await resp.json()
+            content = result.get("choices", [{}])[0].get("message", {}).get("content")
+            if not content:
+                raise ValueError("OpenAI GPT: No content returned")
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                raise ValueError("OpenAI GPT: Invalid JSON response")
+    except Exception as e:
+        raise RuntimeError(f"GPT generation failed: {str(e)}")
 
 @app.post("/upload")
 async def upload_menu(file: UploadFile = File(...)):
@@ -100,4 +119,5 @@ async def upload_menu(file: UploadFile = File(...)):
             menu_items = [item for sublist in results for item in sublist]
             return {"menu": menu_items}
         except Exception as e:
+            logging.error("Upload processing failed", exc_info=True)
             return {"error": str(e)}
