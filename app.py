@@ -4,15 +4,13 @@ import base64
 import json
 import aiohttp
 import asyncio
-from fastapi import FastAPI, UploadFile, Form, File
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
 
 app = FastAPI()
 openai.api_key = os.getenv("OPENAI_API_KEY")
-GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 
-# CORS 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,16 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
-def allowed_file(filename: str) -> bool:
+def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------------------- OCR ----------------------
 def extract_text_from_image(file_data: bytes) -> str:
     base64_image = base64.b64encode(file_data).decode("utf-8")
     response = openai.chat.completions.create(
-        model="gpt-4o-mini",
+        model=MODEL,
         messages=[
             {"role": "system", "content": "You are an OCR assistant."},
             {"role": "user", "content": [
@@ -41,101 +38,61 @@ def extract_text_from_image(file_data: bytes) -> str:
     )
     return response.choices[0].message.content.strip()
 
-# ---------------------- Split ----------------------
-def split_menu_text(menu_text: str) -> List[str]:
+def split_menu_text(menu_text: str, chunk_size: int = 6):
     lines = [line.strip() for line in menu_text.splitlines() if line.strip()]
-    total = len(lines)
+    return ["\n".join(lines[i:i + chunk_size]) for i in range(0, len(lines), chunk_size)]
 
-    if total <= 8:
-        chunk_size = total
-    elif total <= 15:
-        chunk_size = 5
-    elif total <= 30:
-        chunk_size = 6
-    else:
-        chunk_size = 5
-
-    chunks = []
-    for i in range(0, total, chunk_size):
-        chunk = "\n".join(lines[i:i + chunk_size])
-        chunks.append(chunk)
-    return chunks
-
-# ---------------------- GPT Async ----------------------
-async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
+async def generate_chunk(session, chunk: str):
     prompt = f"""
-The following is part of a restaurant menu. For each actual dish, provide:
-
-- A translated name (omit numbering, category labels, and prices)
-- A short description (ingredients, flavor, preparation)
-
-If an item is part of a set meal (e.g., optional dishes listed under a combo), do not list it as a standalone dish. Instead, list the combo as a dish.
-Avoid long descriptions or unnecessary details. Use 1-2 short sentences.
-Respond only in {output_language}.
-
-Format your response as a valid JSON array:
-[
-  {{
-    "name": "...",
-    "description": "..."
-  }}
-]
-
+The following is a restaurant menu. For each dish:
+- Extract the name (omit prices, labels, numbering)
+- If description exists, rephrase it; else generate one
+- Be concise (1–2 sentences)
+Respond in JSON: [{{"name": "...", "description": "..."}}, ...]
 Menu:
-{chunk_text}
+{chunk}
 """
-
     headers = {
         "Authorization": f"Bearer {openai.api_key}",
         "Content-Type": "application/json"
     }
-
     payload = {
-        "model": GPT_MODEL,
+        "model": MODEL,
         "messages": [
             {"role": "system", "content": "You are a food expert."},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        "max_tokens": 500
     }
-
     try:
         async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as resp:
             data = await resp.json()
             content = data["choices"][0]["message"]["content"].strip("```json").strip("```")
             return json.loads(content)
-    except Exception as e:
-        return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
+    except:
+        return []
 
-# ---------------------- Async Merge ----------------------
-async def get_menu_descriptions_async(menu_text: str, output_language: str):
+async def get_menu(menu_text: str):
     chunks = split_menu_text(menu_text)
-    results = []
-
     async with aiohttp.ClientSession() as session:
-        tasks = [generate_chunk_descriptions(session, chunk, output_language) for chunk in chunks]
-        completed = await asyncio.gather(*tasks)
-        for result in completed:
-            results.extend(result)
+        tasks = [generate_chunk(session, chunk) for chunk in chunks]
+        results = await asyncio.gather(*tasks)
+    return [item for group in results for item in group if "name" in item and "description" in item]
 
-    return results
-
-# ---------------------- Upload API ----------------------
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), language: str = Form("English")):
+async def upload(file: UploadFile = File(...)):
     if not allowed_file(file.filename):
-        return {"error": "Unsupported file type. Please upload JPG, JPEG, PNG, or WEBP."}
+        return {"error": "Unsupported file type."}
 
     file_data = await file.read()
-    menu_text = extract_text_from_image(file_data)
+    text = extract_text_from_image(file_data)
+    if not text.strip():
+        return {"error": "OCR failed or empty."}
 
-    if not menu_text.strip() or len(menu_text.strip()) < 10:
-        return {"error": "OCR failed or returned invalid text"}
+    menu = await get_menu(text)
+    return {"menu": menu}
 
-    menu_descriptions = await get_menu_descriptions_async(menu_text, language)
-    return {"menu": menu_descriptions}
-
-# ---------------------- Uvicorn Entry ----------------------
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 5001))
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", 5001)))
+
