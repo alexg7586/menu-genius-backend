@@ -67,8 +67,12 @@ The following is part of a restaurant menu. For each dish, return:
 - Translated name (omit prices, numbers, and section labels)
 - Short description (main ingredients, flavor, preparation)
 
-Ignore prices (e.g., "$12.99", "25元") and items under set meals. Be concise (1-2 sentences).
-Respond only in English as a JSON array:
+Ignore prices (e.g., "$12.99", "25元") and items under set meals.
+
+If a line contains both the dish name and its description (e.g. separated by dash, colon, or parentheses), split them accordingly.
+Extract only the actual dish name into the "name" field, and the rest into the "description" field.
+
+Be concise (1-2 sentences). Respond only in English as a JSON array:
 [
   {{"name": "...", "description": "..."}},
   ...
@@ -117,7 +121,6 @@ async def get_menu_descriptions_async(menu_text: str, output_language: str):
         tasks = [generate_chunk_descriptions(session, chunk, output_language) for chunk in chunks]
         completed = await asyncio.gather(*tasks)
         for result in completed:
-            # 过滤掉错误项（name 以 Error 开头）
             filtered = [
                 item for item in result
                 if isinstance(item, dict) and "name" in item and "description" in item and not item["name"].lower().startswith("error")
