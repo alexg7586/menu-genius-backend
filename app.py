@@ -12,7 +12,7 @@ app = FastAPI()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 
-# CORS 
+# CORS 支持
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +26,7 @@ ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
 def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------------------- OCR ----------------------
+# ---------------------- OCR 提取 ----------------------
 def extract_text_from_image(file_data: bytes) -> str:
     base64_image = base64.b64encode(file_data).decode("utf-8")
     response = openai.chat.completions.create(
@@ -41,7 +41,7 @@ def extract_text_from_image(file_data: bytes) -> str:
     )
     return response.choices[0].message.content.strip()
 
-# ---------------------- Split ----------------------
+# ---------------------- 智能分组 ----------------------
 def split_menu_text(menu_text: str) -> List[str]:
     lines = [line.strip() for line in menu_text.splitlines() if line.strip()]
     total = len(lines)
@@ -61,17 +61,15 @@ def split_menu_text(menu_text: str) -> List[str]:
         chunks.append(chunk)
     return chunks
 
-# ---------------------- GPT Async ----------------------
+# ---------------------- 异步 GPT 调用 ----------------------
 async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
     prompt = f"""
-The following is part of a restaurant menu. For each actual dish, provide:
+Translate the following menu items into {output_language}, and for each item, write a concise description (1-2 short sentences) including:
+- Key ingredients
+- Flavor profile
+- Main preparation method
 
-- A translated name (omit numbering, category labels, and prices)
-- A short description (ingredients, flavor, preparation)
-
-Ignore any price information when identifying dish names.
-Avoid long descriptions or unnecessary details. Use 1-2 short sentences.
-Respond only in {output_language}.
+Avoid long descriptions or unnecessary details. Respond in {output_language} only.
 
 Format your response as a valid JSON array:
 [
@@ -84,7 +82,6 @@ Format your response as a valid JSON array:
 Menu:
 {chunk_text}
 """
-
 
     headers = {
         "Authorization": f"Bearer {openai.api_key}",
@@ -107,7 +104,7 @@ Menu:
     except Exception as e:
         return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
 
-# ---------------------- Async Merge ----------------------
+# ---------------------- 主处理逻辑 ----------------------
 async def get_menu_descriptions_async(menu_text: str, output_language: str):
     chunks = split_menu_text(menu_text)
     results = []
@@ -120,7 +117,7 @@ async def get_menu_descriptions_async(menu_text: str, output_language: str):
 
     return results
 
-# ---------------------- Upload API ----------------------
+# ---------------------- FastAPI 接口 ----------------------
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...), language: str = Form("English")):
     if not allowed_file(file.filename):
@@ -135,8 +132,9 @@ async def upload_file(file: UploadFile = File(...), language: str = Form("Englis
     menu_descriptions = await get_menu_descriptions_async(menu_text, language)
     return {"menu": menu_descriptions}
 
-# ---------------------- Uvicorn Entry ----------------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 5001))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
+
+
