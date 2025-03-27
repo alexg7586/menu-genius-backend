@@ -1,9 +1,11 @@
+
 import os
 import openai
 import base64
 import json
 import aiohttp
 import asyncio
+import re
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
@@ -12,7 +14,6 @@ app = FastAPI()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 
-# CORS 支持
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,9 +42,19 @@ def extract_text_from_image(file_data: bytes) -> str:
     )
     return response.choices[0].message.content.strip()
 
+# ---------------------- 菜名清洗 ----------------------
+def preprocess_menu_lines(text: str) -> List[str]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    clean_lines = []
+    for line in lines:
+        line = re.sub(r"^\d+[\.|\-]\s*", "", line)  # 去前缀编号
+        line = re.sub(r"(\s*[-–—]*\s*)?\$?\d+(\.\d+)?\s*(元|rmb|usd)?$", "", line, flags=re.IGNORECASE)  # 去价格
+        clean_lines.append(line.strip())
+    return clean_lines
+
 # ---------------------- 智能分组 ----------------------
 def split_menu_text(menu_text: str) -> List[str]:
-    lines = [line.strip() for line in menu_text.splitlines() if line.strip()]
+    lines = preprocess_menu_lines(menu_text)
     total = len(lines)
 
     if total <= 8:
@@ -83,18 +94,23 @@ Menu items:
             {"role": "system", "content": "You are a food expert."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.4  # 更稳定
+        "temperature": 0.4
     }
 
     try:
         async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as resp:
             data = await resp.json()
-            content = data["choices"][0]["message"]["content"].strip("```json").strip("```")
-            return json.loads(content)
+            content = data["choices"][0]["message"]["content"]
+            if "```json" in content:
+                content = content.split("```json")[-1].split("```")[0].strip()
+            try:
+                return json.loads(content)
+            except Exception as e:
+                return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
     except Exception as e:
-        return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
+        return [{"name": "Error", "description": f"OpenAI API error: {str(e)}"}]
 
-# ---------------------- 主处理逻辑 ----------------------
+# ---------------------- 主逻辑 ----------------------
 async def get_menu_descriptions_async(menu_text: str, output_language: str):
     chunks = split_menu_text(menu_text)
     results = []
@@ -107,17 +123,19 @@ async def get_menu_descriptions_async(menu_text: str, output_language: str):
 
     return results
 
-# ---------------------- FastAPI 接口 ----------------------
+# ---------------------- 接口 ----------------------
+from fastapi.responses import JSONResponse
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...), language: str = Form("English")):
     if not allowed_file(file.filename):
-        return {"error": "Unsupported file type. Please upload JPG, JPEG, PNG, or WEBP."}
+        return JSONResponse(content={"error": "Unsupported file type. Please upload JPG, JPEG, PNG, or WEBP."}, status_code=400)
 
     file_data = await file.read()
     menu_text = extract_text_from_image(file_data)
 
     if not menu_text.strip() or len(menu_text.strip()) < 10:
-        return {"error": "OCR failed or returned invalid text"}
+        return JSONResponse(content={"error": "OCR failed or returned invalid text"}, status_code=400)
 
     menu_descriptions = await get_menu_descriptions_async(menu_text, language)
     return {"menu": menu_descriptions}
