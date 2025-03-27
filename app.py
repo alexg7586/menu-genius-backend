@@ -19,7 +19,7 @@ def extract_text_from_image(file_data):
     base64_image = base64.b64encode(file_data).decode("utf-8")
 
     response = openai.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You are an OCR assistant."},
             {"role": "user", "content": [
@@ -32,17 +32,17 @@ def extract_text_from_image(file_data):
     return response.choices[0].message.content
 
 def get_menu_descriptions(menu_text, output_language="English"):
-    prompt = f"""The following is a menu extracted from an image:
+    prompt = f"""
+Here's a menu text:
+
 {menu_text}
 
-Please provide a detailed and informative description of each dish, including key ingredients, flavor profile, and any notable preparation styles.
-Translate both the dish name and description fully into {output_language}, and do not include any English.
-Only respond using {output_language} characters.
-Return the result as a JSON array of objects with 'name' and 'description'.
+For each dish, return its translated name and a short, rich description (ingredients, flavor, preparation).
+Use only {output_language}, and output a valid JSON array: [{{"name": "...", "description": "..."}}]
 """
 
     response = openai.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You are a food expert."},
             {"role": "user", "content": prompt}
