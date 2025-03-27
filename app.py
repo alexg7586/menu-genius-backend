@@ -52,13 +52,24 @@ def split_menu_text(menu_text: str, chunk_size: int = 6):
     return ["\n".join(lines[i:i + chunk_size]) for i in range(0, len(lines), chunk_size)]
 
 async def generate_chunk(session, chunk: str):
-    # Construct prompt for GPT to parse and describe menu items
+    # Refined prompt to improve accuracy of dish extraction and description quality
     prompt = f"""
-The following is a restaurant menu. For each dish:
-- Extract the name (omit prices, labels, numbering)
-- If description exists, rephrase it; else generate one
-- Be concise (1–2 sentences)
-Respond in JSON: [{{"name": "...", "description": "..."}}, ...]
+You are analyzing a restaurant menu. Each line may include a dish name, or a dish name followed by a description.
+
+Instructions:
+- Extract the actual dish name (omit prices, numbering, category labels, and combo options).
+- If a description exists, rewrite it into 1–2 clear, natural English sentences.
+- If no description exists, generate one based on the dish name and common culinary context.
+- If the line includes both name and description (e.g. separated by dash, colon, or parentheses), split accordingly.
+
+Only return dishes that could be ordered individually. Do not include set meals or section headers.
+
+Output format:
+[
+  {{ "name": "Dish Name", "description": "Short English description." }},
+  ...
+]
+
 Menu:
 {chunk}
 """
@@ -112,5 +123,3 @@ if __name__ == "__main__":
     import uvicorn
     # Start the FastAPI app using Uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", 5001)))
-
-
