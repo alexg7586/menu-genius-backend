@@ -19,7 +19,7 @@ def extract_text_from_image(file_data):
     base64_image = base64.b64encode(file_data).decode("utf-8")
 
     response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an OCR assistant."},
             {"role": "user", "content": [
@@ -42,7 +42,7 @@ Use only {output_language}, and output a valid JSON array: [{{"name": "...", "de
 """
 
     response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are a food expert."},
             {"role": "user", "content": prompt}
