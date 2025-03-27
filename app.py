@@ -61,17 +61,17 @@ def split_menu_text(menu_text: str) -> List[str]:
         chunks.append(chunk)
     return chunks
 
-# ---------------------- Prompt Templates ----------------------
-EN_PROMPT_TEMPLATE = """
+# ---------------------- GPT Async ----------------------
+async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
+    prompt = f"""
 The following is part of a restaurant menu. For each actual dish, provide:
 
 - A translated name (omit numbering, category labels, and prices)
 - A short description (ingredients, flavor, preparation)
 
-Ignore any price information (e.g., numbers like "$12.99", "25元") when identifying dish names.
-If an item is part of a set meal (e.g., optional dishes listed under a combo), do not list it as a standalone dish.
+If an item is part of a set meal (e.g., optional dishes listed under a combo), do not list it as a standalone dish. Instead, list the combo as a dish.
 Avoid long descriptions or unnecessary details. Use 1-2 short sentences.
-Respond only in English.
+Respond only in {output_language}.
 
 Format your response as a valid JSON array:
 [
@@ -84,34 +84,6 @@ Format your response as a valid JSON array:
 Menu:
 {chunk_text}
 """
-
-ZH_PROMPT_TEMPLATE = """
-以下是餐厅菜单的一部分。请提取其中每一道真实的菜品，并给出以下信息：
-
-- 菜名（翻译为中文，不包括编号、栏目或价格）
-- 简短的中文描述（包含主要食材、口味和制作方式）
-
-请忽略价格（如 "$12.99"、"25元"）以及套餐中的可选项目，不要将这些当作独立菜品。
-描述应简洁自然，控制在 1-2 句话之内。只用中文作答。
-
-请以以下 JSON 格式返回：
-[
-  {{
-    "name": "...",
-    "description": "..."
-  }}
-]
-
-菜单内容：
-{chunk_text}
-"""
-
-# ---------------------- GPT Async ----------------------
-async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
-    if output_language.lower() == "chinese":
-        prompt = ZH_PROMPT_TEMPLATE.format(chunk_text=chunk_text)
-    else:
-        prompt = EN_PROMPT_TEMPLATE.format(chunk_text=chunk_text)
 
     headers = {
         "Authorization": f"Bearer {openai.api_key}",
