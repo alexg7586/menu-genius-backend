@@ -57,7 +57,7 @@ You are analyzing a restaurant menu. Each line may include a dish name, or a dis
 
 Instructions:
 - Extract the actual dish name (omit prices, numbering, category labels, and combo options).
-- If a description exists, rewrite it into 1–2 clear, natural English sentences.
+- If a description exists, rewrite it into one or two clear, natural English sentences.
 - If no description exists, generate one based on the dish name and common culinary context.
 - Return dishes only, not headers.
 
