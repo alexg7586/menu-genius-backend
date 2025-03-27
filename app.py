@@ -12,7 +12,7 @@ app = FastAPI()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 
-# CORS 支持
+# CORS 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +26,7 @@ ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
 def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------------------- OCR 提取 ----------------------
+# ---------------------- OCR ----------------------
 def extract_text_from_image(file_data: bytes) -> str:
     base64_image = base64.b64encode(file_data).decode("utf-8")
     response = openai.chat.completions.create(
@@ -41,7 +41,7 @@ def extract_text_from_image(file_data: bytes) -> str:
     )
     return response.choices[0].message.content.strip()
 
-# ---------------------- 智能分组 ----------------------
+# ---------------------- Split ----------------------
 def split_menu_text(menu_text: str) -> List[str]:
     lines = [line.strip() for line in menu_text.splitlines() if line.strip()]
     total = len(lines)
@@ -61,30 +61,28 @@ def split_menu_text(menu_text: str) -> List[str]:
         chunks.append(chunk)
     return chunks
 
-# ---------------------- 异步 GPT 调用 ----------------------
-async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
-    prompt = f"""
-Translate the following menu items into {output_language}, and for each item, write a concise description (1-2 short sentences) including:
-- Key ingredients
-- Flavor profile
-- Main preparation method
+# ---------------------- Prompt Template ----------------------
+PROMPT_TEMPLATE = """
+The following is part of a restaurant menu. For each dish, return:
+- Translated name (omit prices, numbers, and section labels)
+- Short description (main ingredients, flavor, preparation)
 
-Avoid long descriptions or unnecessary details. Respond in {output_language} only.
-
-Format your response as a valid JSON array:
+Ignore prices (e.g., "$12.99", "25元") and items under set meals. Be concise (1-2 sentences).
+Respond only in English as a JSON array:
 [
-  {{
-    "name": "...",
-    "description": "..."
-  }}
+  {{"name": "...", "description": "..."}},
+  ...
 ]
-
 Menu:
 {chunk_text}
 """
 
+# ---------------------- GPT Async ----------------------
+async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
+    prompt = PROMPT_TEMPLATE.format(chunk_text=chunk_text)
+
     headers = {
-        "Authorization": f"Bearer {openai.api_key}",
+        "Authorization": f"Bearer {openai.api_key}" ,
         "Content-Type": "application/json"
     }
 
@@ -100,11 +98,17 @@ Menu:
         async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as resp:
             data = await resp.json()
             content = data["choices"][0]["message"]["content"].strip("```json").strip("```")
-            return json.loads(content)
+            print("GPT raw content:", content)
+            result = json.loads(content)
+            return result
     except Exception as e:
-        return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
+        return [{
+            "name": "Error",
+            "description": f"Failed to process chunk: {str(e)}",
+            "raw": content if 'content' in locals() else ''
+        }]
 
-# ---------------------- 主处理逻辑 ----------------------
+# ---------------------- Async Merge ----------------------
 async def get_menu_descriptions_async(menu_text: str, output_language: str):
     chunks = split_menu_text(menu_text)
     results = []
@@ -113,11 +117,16 @@ async def get_menu_descriptions_async(menu_text: str, output_language: str):
         tasks = [generate_chunk_descriptions(session, chunk, output_language) for chunk in chunks]
         completed = await asyncio.gather(*tasks)
         for result in completed:
-            results.extend(result)
+            # 过滤掉错误项（name 以 Error 开头）
+            filtered = [
+                item for item in result
+                if isinstance(item, dict) and "name" in item and "description" in item and not item["name"].lower().startswith("error")
+            ]
+            results.extend(filtered)
 
     return results
 
-# ---------------------- FastAPI 接口 ----------------------
+# ---------------------- Upload API ----------------------
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...), language: str = Form("English")):
     if not allowed_file(file.filename):
@@ -132,6 +141,7 @@ async def upload_file(file: UploadFile = File(...), language: str = Form("Englis
     menu_descriptions = await get_menu_descriptions_async(menu_text, language)
     return {"menu": menu_descriptions}
 
+# ---------------------- Uvicorn Entry ----------------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 5001))
