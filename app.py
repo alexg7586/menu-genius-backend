@@ -61,32 +61,32 @@ def split_menu_text(menu_text: str) -> List[str]:
         chunks.append(chunk)
     return chunks
 
-# ---------------------- Prompt Template ----------------------
-PROMPT_TEMPLATE = """
-The following is part of a restaurant menu. Each line may include a dish name, and some lines may also include a brief description.
+# ---------------------- GPT Async ----------------------
+async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
+    prompt = f"""
+The following is part of a restaurant menu. For each actual dish, provide:
 
-Your task is:
-1. Extract the actual dish name (omit prices, numbering, and section labels).
-2. If a description is present, rephrase it into a clear, natural English sentence.
-3. If no description is present, write a reasonable one based on the dish name and culinary knowledge.
-4. All descriptions must be 1–2 natural-sounding sentences.
+- A translated name (omit numbering, category labels, and prices)
+- A short description (ingredients, flavor, preparation)
 
-Output only a JSON array:
+If an item is part of a set meal (e.g., optional dishes listed under a combo), do not list it as a standalone dish. Instead, list the combo as a dish.
+Avoid long descriptions or unnecessary details. Use 1-2 short sentences.
+Respond only in {output_language}.
+
+Format your response as a valid JSON array:
 [
-  { "name": "...", "description": "..." },
-  ...
+  {{
+    "name": "...",
+    "description": "..."
+  }}
 ]
 
 Menu:
 {chunk_text}
 """
 
-# ---------------------- GPT Async ----------------------
-async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
-    prompt = PROMPT_TEMPLATE.format(chunk_text=chunk_text)
-
     headers = {
-        "Authorization": f"Bearer {openai.api_key}" ,
+        "Authorization": f"Bearer {openai.api_key}",
         "Content-Type": "application/json"
     }
 
@@ -102,15 +102,9 @@ async def generate_chunk_descriptions(session, chunk_text: str, output_language:
         async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as resp:
             data = await resp.json()
             content = data["choices"][0]["message"]["content"].strip("```json").strip("```")
-            print("GPT raw content:", content)
-            result = json.loads(content)
-            return result
+            return json.loads(content)
     except Exception as e:
-        return [{
-            "name": "Error",
-            "description": f"Failed to process chunk: {str(e)}",
-            "raw": content if 'content' in locals() else ''
-        }]
+        return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
 
 # ---------------------- Async Merge ----------------------
 async def get_menu_descriptions_async(menu_text: str, output_language: str):
@@ -121,12 +115,7 @@ async def get_menu_descriptions_async(menu_text: str, output_language: str):
         tasks = [generate_chunk_descriptions(session, chunk, output_language) for chunk in chunks]
         completed = await asyncio.gather(*tasks)
         for result in completed:
-            # 过滤掉错误项（name 以 Error 开头）
-            filtered = [
-                item for item in result
-                if isinstance(item, dict) and "name" in item and "description" in item and not item["name"].lower().startswith("error")
-            ]
-            results.extend(filtered)
+            results.extend(result)
 
     return results
 
