@@ -1,4 +1,3 @@
-
 import os
 import openai
 import base64
@@ -13,7 +12,7 @@ app = FastAPI()
 
 # Set OpenAI API key and model from environment
 openai.api_key = os.getenv("OPENAI_API_KEY")
-MODEL = os.getenv("GPT_MODEL", "gpt-4o")
+MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 
 # Enable CORS for frontend compatibility
 app.add_middleware(
@@ -28,89 +27,99 @@ app.add_middleware(
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
 def allowed_file(filename):
+    # Check if uploaded file has a valid extension
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Clean raw OCR text before sending to GPT
-def clean_ocr_text(raw_text: str) -> str:
-    lines = raw_text.strip().splitlines()
-    clean_lines = []
-    for line in lines:
-        line = line.strip()
-        if not line or len(line) < 2:
-            continue
-        if any(c.isdigit() for c in line) and ('$' in line or len(line) < 4):
-            continue
-        if line.lower() in ["menu", "starter", "main", "dessert"]:
-            continue
-        clean_lines.append(line)
-    return "\n".join(clean_lines)
-
-# Extract text using OpenAI Vision API
-async def extract_text_from_image(file_data: bytes) -> str:
+def extract_text_from_image(file_data: bytes) -> str:
+    # Convert image bytes to base64 for OpenAI Vision API
     base64_image = base64.b64encode(file_data).decode("utf-8")
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {openai.api_key}"}
-    payload = {
-        "model": "gpt-4-vision-preview",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Please extract all visible text from this image."},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                ]
-            }
-        ],
-        "max_tokens": 1000
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
-            result = await resp.json()
-            return result["choices"][0]["message"]["content"]
+    # Call OpenAI Vision API to extract menu text from image
+    response = openai.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": "You are an OCR assistant."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Extract text from this image."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]}
+        ]
+    )
+    return response.choices[0].message.content.strip()
 
-# Use GPT to generate descriptions
-async def generate_menu_descriptions(menu_text: str, language: str = "English") -> str:
+def split_menu_text(menu_text: str, chunk_size: int = 6):
+    # Split full menu text into chunks of N lines for parallel GPT processing
+    lines = [line.strip() for line in menu_text.splitlines() if line.strip()]
+    return ["\n".join(lines[i:i + chunk_size]) for i in range(0, len(lines), chunk_size)]
+
+async def generate_chunk(session, chunk: str):
+    # Refined prompt to improve accuracy of dish extraction and description quality
     prompt = f"""
-You are a professional food expert. The following text was extracted from a restaurant menu image. For each line that seems like a dish name, generate a short, accurate, 1-2 sentence description. If the line is not a food item, skip it. Only output real dishes.
+You are analyzing a restaurant menu. Each line may include a dish name, or a dish name followed by a description.
+
+Instructions:
+- Extract the actual dish name (omit prices, numbering, category labels, and combo options).
+- If a description exists, rewrite it into 1–2 clear, natural English sentences.
+- If no description exists, generate one based on the dish name and common culinary context.
+- If the line includes both name and description (e.g. separated by dash, colon, or parentheses), split accordingly.
+
+Only return dishes that could be ordered individually. Do not include set meals or section headers.
 
 Output format:
-Dish Name: Description
+[
+  {{ "name": "Dish Name", "description": "Short English description." }},
+  ...
+]
 
-Respond in {language}.
-
-Menu text:
-{menu_text}
+Menu:
+{chunk}
 """
-    response = await openai.ChatCompletion.acreate(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
-    )
-    return response.choices[0].message.content
-
-# Parse GPT output
-def parse_items(text: str):
-    items = []
-    for line in text.strip().split("\n"):
-        if ":" in line:
-            name, desc = line.split(":", 1)
-            items.append({
-                "name": name.strip(),
-                "description": desc.strip()
-            })
-    return items
-
-# Upload endpoint
-@app.post("/upload")
-async def upload_image(file: UploadFile = File(...), language: str = "English"):
-    if not allowed_file(file.filename):
-        return {"error": "Invalid file type."}
-
-    file_data = await file.read()
+    headers = {
+        "Authorization": f"Bearer {openai.api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": "You are a food expert."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 500
+    }
     try:
-        raw_text = await extract_text_from_image(file_data)
-        cleaned_text = clean_ocr_text(raw_text)
-        gpt_result = await generate_menu_descriptions(cleaned_text, language)
-        items = parse_items(gpt_result)
-        return {"items": items}
-    except Exception as e:
-        return {"error": str(e)}
+        # Asynchronously call OpenAI GPT for a chunk of menu
+        async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as resp:
+            data = await resp.json()
+            content = data["choices"][0]["message"]["content"].strip("```json").strip("```")
+            return json.loads(content)
+    except:
+        return []
+
+async def get_menu(menu_text: str):
+    # Process all menu chunks concurrently and aggregate results
+    chunks = split_menu_text(menu_text)
+    async with aiohttp.ClientSession() as session:
+        tasks = [generate_chunk(session, chunk) for chunk in chunks]
+        results = await asyncio.gather(*tasks)
+    # Flatten nested lists and filter only valid entries
+    return [item for group in results for item in group if "name" in item and "description" in item]
+
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    # Validate uploaded file type
+    if not allowed_file(file.filename):
+        return {"error": "Unsupported file type."}
+
+    # Read image and perform OCR
+    file_data = await file.read()
+    text = extract_text_from_image(file_data)
+    if not text.strip():
+        return {"error": "OCR failed or empty."}
+
+    # Generate menu descriptions using GPT
+    menu = await get_menu(text)
+    return {"menu": menu}
+
+if __name__ == "__main__":
+    import uvicorn
+    # Start the FastAPI app using Uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", 5001)))
