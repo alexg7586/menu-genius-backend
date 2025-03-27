@@ -61,17 +61,17 @@ def split_menu_text(menu_text: str) -> List[str]:
         chunks.append(chunk)
     return chunks
 
-# ---------------------- GPT Async ----------------------
-async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
-    prompt = f"""
+# ---------------------- Prompt Template ----------------------
+PROMPT_TEMPLATE = """
 The following is part of a restaurant menu. For each actual dish, provide:
 
 - A translated name (omit numbering, category labels, and prices)
 - A short description (ingredients, flavor, preparation)
 
-If an item is part of a set meal (e.g., optional dishes listed under a combo), do not list it as a standalone dish. Instead, list the combo as a dish.
+Ignore any price information (e.g., numbers like "$12.99", "25元") when identifying dish names.
+If an item is part of a set meal (e.g., optional dishes listed under a combo), do not list it as a standalone dish.
 Avoid long descriptions or unnecessary details. Use 1-2 short sentences.
-Respond only in {output_language}.
+Respond only in English. Respond only with valid JSON. Do not include any explanation, markdown, or extra text.
 
 Format your response as a valid JSON array:
 [
@@ -85,8 +85,12 @@ Menu:
 {chunk_text}
 """
 
+# ---------------------- GPT Async ----------------------
+async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
+    prompt = PROMPT_TEMPLATE.format(chunk_text=chunk_text)
+
     headers = {
-        "Authorization": f"Bearer {openai.api_key}",
+        "Authorization": f"Bearer {openai.api_key}" ,
         "Content-Type": "application/json"
     }
 
@@ -102,9 +106,15 @@ Menu:
         async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as resp:
             data = await resp.json()
             content = data["choices"][0]["message"]["content"].strip("```json").strip("```")
-            return json.loads(content)
+            print("GPT raw content:", content)
+            result = json.loads(content)
+            return result
     except Exception as e:
-        return [{"name": "Error", "description": f"Failed to process chunk: {str(e)}"}]
+        return [{
+            "name": "Error",
+            "description": f"Failed to process chunk: {str(e)}",
+            "raw": content if 'content' in locals() else ''
+        }]
 
 # ---------------------- Async Merge ----------------------
 async def get_menu_descriptions_async(menu_text: str, output_language: str):
