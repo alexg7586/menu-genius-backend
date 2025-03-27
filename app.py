@@ -64,25 +64,11 @@ def split_menu_text(menu_text: str) -> List[str]:
 # ---------------------- 异步 GPT 调用 ----------------------
 async def generate_chunk_descriptions(session, chunk_text: str, output_language: str):
     prompt = f"""
-Translate the following menu items into {output_language}, and for each item, write a concise description (1-2 short sentences) including:
-- Key ingredients
-- Flavor profile
-- Main preparation method
+Translate the following menu items into {output_language} and write a short, rich description for each (ingredients, flavor, prep).
+Use only {output_language}. Return valid JSON: [{{"name": "...", "description": "..."}}]
 
-Avoid long descriptions or unnecessary details. Respond in {output_language} only.
-
-Format your response as a valid JSON array:
-[
-  {{
-    "name": "...",
-    "description": "..."
-  }}
-]
-
-Menu:
 {chunk_text}
 """
-
     headers = {
         "Authorization": f"Bearer {openai.api_key}",
         "Content-Type": "application/json"
