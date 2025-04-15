@@ -53,16 +53,24 @@ async def extract_text_from_image_async(session, image_data: bytes) -> str:
 
 async def generate_chunk(session, chunk: str):
     prompt = f"""
-You are analyzing a restaurant menu. Each line may include a dish name, or a dish name followed by a description.
+You are analyzing a restaurant menu. Each line may include a dish name, an optional description, and sometimes a price.
 
 Instructions:
-- Extract the actual dish name (omit prices, numbering, category labels, and combo options).
-- If a description exists, rewrite it into one or two clear, natural English sentences.
+- Extract the actual dish name (omit numbering or category labels).
+- Extract any available price as a string. If no price is found, you may omit the field or return an empty string.
+- If a description exists, rewrite it into 1–2 clear, natural English sentences.
 - If no description exists, generate one based on the dish name and common culinary context.
-- Return dishes only, not headers.
+- Return only real dishes, not section headers.
 
 Output format:
-[{{"name": "Dish Name", "description": "Short English description."}}, ...]
+[
+  {{
+    "name": "Dish Name",
+    "description": "Short English description.",
+    "price": "Optional price as a string, e.g., '$12.99', '120 THB', or '₫45,000'"
+  }},
+  ...
+]
 
 Menu:
 {chunk}
@@ -80,7 +88,7 @@ Menu:
     }
     async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
         result = await resp.json()
-        return json.loads(result["choices"][0]["message"]["content"])  # return list of dicts
+        return json.loads(result["choices"][0]["message"]["content"])  # List[dict] with name, description, price
 
 @app.post("/upload")
 async def upload_menu(file: UploadFile = File(...)):
