@@ -56,14 +56,13 @@ async def generate_chunk(session, chunk: str):
 You are analyzing a restaurant menu. Each line may include a dish name, or a dish name followed by a description.
 
 Instructions:
-- Extract the actual dish name (omit numbering, category labels, and combo options).
-- Extract the price if present; otherwise, use "N/A".
+- Extract the actual dish name (omit prices, numbering, category labels, and combo options).
 - If a description exists, rewrite it into one or two clear, natural English sentences.
 - If no description exists, generate one based on the dish name and common culinary context.
 - Return dishes only, not headers.
 
 Output format:
-[{{"name": "Dish Name", "description": "Short English description.", "price": "Price value"}}, ...]
+[{{"name": "Dish Name", "description": "Short English description."}}, ...]
 
 Menu:
 {chunk}
@@ -81,14 +80,7 @@ Menu:
     }
     async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
         result = await resp.json()
-        content = result["choices"][0]["message"]["content"].strip()
-        try:
-            parsed = json.loads(content)
-            print("Parsed JSON:", parsed)
-            return parsed
-        except json.JSONDecodeError as e:
-            print("JSON decode error:", e)
-            return []
+        return json.loads(result["choices"][0]["message"]["content"])  # return list of dicts
 
 @app.post("/upload")
 async def upload_menu(file: UploadFile = File(...)):
